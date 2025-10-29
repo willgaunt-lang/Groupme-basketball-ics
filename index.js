@@ -18,16 +18,21 @@ app.get('/calendar.ics', async (req, res) => {
       const groupId = process.env.GROUPME_GROUP_ID;
       const apiKey = process.env.GROUPME_API_KEY;
       console.log('Fetching from GroupMe API with group ID:', groupId);
-      const response = await fetch(`https://api.groupme.com/v3/groups/${groupId}/calendar?token=${apiKey}`);
-      const data = await response.json();
-      console.log('API response meta:', data.meta);
-      if (data.meta.code !== 200) throw new Error('API error: ' + data.meta.code);
-      const events = data.response.events || [];
+      let response = await fetch(`https://api.groupme.com/v3/groups/${groupId}/calendar?token=${apiKey}`);
+      let data = await response.json();
+      if (data.meta && data.meta.code !== 200) {
+        console.log('Calendar endpoint failed, trying calendar_events...');
+        response = await fetch(`https://api.groupme.com/v3/groups/${groupId}/calendar_events?token=${apiKey}`);
+        data = await response.json();
+      }
+      console.log('API response meta:', data.meta || 'No meta');
+      if (data.meta && data.meta.code !== 200) throw new Error('API error: ' + (data.meta.code || response.status));
+      const events = data.response ? (data.response.events || data.response.calendar_events || []) : [];
       console.log('Found', events.length, 'events');
       cachedEvents = events.map(event => ({
-        start: new Date(event.starts_at),
-        end: new Date(event.ends_at || event.starts_at), // Fallback for all-day
-        summary: event.title || 'GroupMe Event',
+        start: new Date(event.starts_at || event.begin),
+        end: new Date(event.ends_at || event.end || event.starts_at || event.begin),
+        summary: event.title || event.name || 'GroupMe Event',
         description: event.description || '',
         location: event.location || ''
       }));
@@ -39,9 +44,11 @@ app.get('/calendar.ics', async (req, res) => {
   }
 
   const cal = ical({ name: process.env.GROUPME_STATIC_NAME || 'GroupMe Calendar' });
-  cachedEvents.forEach(event => cal.createEvent(event));
+  if (cachedEvents.length > 0) {
+    cachedEvents.forEach(event => cal.createEvent(event));
+  }
   const icsContent = cal.toString();
-  console.log('Generated ICS length:', icsContent.length);
+  console.log('Generated ICS length:', icsContent.length, '(0 if empty)');
   res.attachment('calendar.ics');
   res.type('text/calendar; charset=utf-8');
   res.send(icsContent);
